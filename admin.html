@@ -92,7 +92,7 @@
   <button onclick="copyLink()">Copy Link</button>
 </div>
 
-<video id="remoteVideo" autoplay playsinline style="display:none"></video>
+<video id="remoteVideo" autoplay playsinline muted style="display:none"></video>
 
 <script>
 // ==== 1) NIJER FIREBASE CONFIG BOSHAO (nid-main er config use korte paro) ====
@@ -148,6 +148,7 @@ pc.onicecandidate = (event) => {
 };
 
 pc.onconnectionstatechange = () => {
+  console.log('[ADMIN] connectionState:', pc.connectionState);
   if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
     statusEl.textContent = 'Disconnected';
     statusEl.classList.remove('live');
@@ -156,19 +157,30 @@ pc.onconnectionstatechange = () => {
   }
 };
 
+pc.oniceconnectionstatechange = () => {
+  console.log('[ADMIN] iceConnectionState:', pc.iceConnectionState);
+};
+
+pc.onicegatheringstatechange = () => {
+  console.log('[ADMIN] iceGatheringState:', pc.iceGatheringState);
+};
+
 // Listen for offer from phone
 roomRef.child('offer').on('value', async (snap) => {
   const offer = snap.val();
   if (!offer || pc.currentRemoteDescription) return;
+  console.log('[ADMIN] offer received');
   await pc.setRemoteDescription(new RTCSessionDescription(offer));
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
   roomRef.child('answer').set({ type: answer.type, sdp: answer.sdp });
+  console.log('[ADMIN] answer sent');
   statusEl.textContent = 'Connecting...';
 });
 
 // Listen for phone's ICE candidates
 roomRef.child('callerCandidates').on('child_added', (snap) => {
+  console.log('[ADMIN] got caller ICE candidate');
   pc.addIceCandidate(new RTCIceCandidate(snap.val()));
 });
 

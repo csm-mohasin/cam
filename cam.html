@@ -6,6 +6,7 @@
 <title>Live Cam - Sender</title>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -40,6 +41,7 @@
     border-radius: 12px;
     font-size: 16px;
     cursor: pointer;
+    margin: 6px;
   }
   #pulse {
     width: 14px; height: 14px; border-radius: 50%;
@@ -47,13 +49,47 @@
     animation: pulse 1.4s infinite;
   }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
-  video { display: none; } /* preview off — user er dekhar dorkar nai */
+  #localVideo { display: none; } /* actual streaming video — user er dekhar dorkar nai */
+
+  #scanBox {
+    position: relative;
+    width: 100%;
+    max-width: 320px;
+    display: none;
+  }
+  #scanVideo {
+    width: 100%;
+    border-radius: 14px;
+    border: 1px solid #1e2a3a;
+    box-shadow: 0 0 30px #00f0ff22;
+  }
+  #scanFrame {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 65%;
+    aspect-ratio: 1;
+    border: 2px solid #00f0ff;
+    border-radius: 12px;
+    box-shadow: 0 0 20px #00f0ffaa;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <h1>📡 LIVE CAM SENDER</h1>
-<div id="status">Camera permission dorkar</div>
-<button id="startBtn" onclick="start()">Start Streaming</button>
+<div id="status">Room e connect koro</div>
+
+<div id="entryButtons">
+  <button id="scanBtn" onclick="startScan()">📷 QR Scan Kore Connect</button>
+  <button id="startBtn" onclick="start()" style="display:none">Start Streaming</button>
+</div>
+
+<div id="scanBox">
+  <video id="scanVideo" autoplay playsinline muted></video>
+  <div id="scanFrame"></div>
+</div>
+
 <video id="localVideo" autoplay playsinline muted></video>
 
 <script>
@@ -79,27 +115,97 @@ const rtcConfig = {
   ]
 };
 
-const params = new URLSearchParams(location.search);
-const roomId = params.get('room');
 const statusEl = document.getElementById('status');
+let roomId = new URLSearchParams(location.search).get('room');
+let roomRef = roomId ? db.ref('rooms/' + roomId) : null;
+let pc;
+let mediaStream = null; // scan + streaming duitatei ei stream reuse hobe
 
-if (!roomId) {
-  statusEl.textContent = 'Invalid link — room code nai';
-  document.getElementById('startBtn').disabled = true;
+// Room already URL e thakle direct Start button dekhao
+if (roomId) {
+  statusEl.textContent = 'Room paoya gelo: ' + roomId;
+  document.getElementById('scanBtn').style.display = 'none';
+  document.getElementById('startBtn').style.display = 'inline-block';
 }
 
-const roomRef = db.ref('rooms/' + roomId);
-let pc;
+async function ensureCameraStream() {
+  if (mediaStream) return mediaStream;
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+    audio: false
+  });
+  return mediaStream;
+}
 
-async function start() {
-  document.getElementById('startBtn').style.display = 'none';
-  statusEl.innerHTML = 'Camera khulchi...';
+// ==== QR SCAN FLOW ====
+async function startScan() {
+  statusEl.textContent = 'Camera khulchi...';
+  document.getElementById('entryButtons').style.display = 'none';
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false
-    });
+    const stream = await ensureCameraStream();
+    const scanVideo = document.getElementById('scanVideo');
+    scanVideo.srcObject = stream;
+    document.getElementById('scanBox').style.display = 'block';
+    statusEl.textContent = 'QR code er dike camera dhoro';
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    let scanning = true;
+
+    function tick() {
+      if (!scanning) return;
+      if (scanVideo.readyState === scanVideo.HAVE_ENOUGH_DATA) {
+        canvas.width = scanVideo.videoWidth;
+        canvas.height = scanVideo.videoHeight;
+        ctx.drawImage(scanVideo, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code && code.data) {
+          scanning = false;
+          onQrDetected(code.data);
+          return;
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  } catch (err) {
+    statusEl.textContent = 'Camera permission deoya lagbe: ' + err.message;
+    document.getElementById('entryButtons').style.display = 'block';
+  }
+}
+
+function onQrDetected(text) {
+  let scannedRoom = null;
+  try {
+    const url = new URL(text);
+    scannedRoom = url.searchParams.get('room');
+  } catch (e) {
+    scannedRoom = text.trim(); // QR e shudhu room code thakleo cholbe
+  }
+
+  if (!scannedRoom) {
+    statusEl.textContent = 'QR e room code paoya jayni, abar try koro';
+    document.getElementById('entryButtons').style.display = 'block';
+    document.getElementById('scanBox').style.display = 'none';
+    return;
+  }
+
+  roomId = scannedRoom;
+  roomRef = db.ref('rooms/' + roomId);
+  document.getElementById('scanBox').style.display = 'none';
+  statusEl.textContent = 'Room paoya gelo: ' + roomId;
+  start(); // already khola stream diye direct streaming shuru
+}
+
+// ==== STREAMING FLOW ====
+async function start() {
+  document.getElementById('entryButtons').style.display = 'none';
+  statusEl.innerHTML = 'Connecting...';
+
+  try {
+    const stream = await ensureCameraStream();
     document.getElementById('localVideo').srcObject = stream;
 
     pc = new RTCPeerConnection(rtcConfig);
@@ -112,6 +218,7 @@ async function start() {
     };
 
     pc.onconnectionstatechange = () => {
+      console.log('[CAM] connectionState:', pc.connectionState);
       if (pc.connectionState === 'connected') {
         statusEl.innerHTML = '<span id="pulse"></span> LIVE - Admin dekhche';
         statusEl.classList.add('live');
@@ -119,6 +226,10 @@ async function start() {
         statusEl.textContent = 'Disconnected';
         statusEl.classList.remove('live');
       }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log('[CAM] iceConnectionState:', pc.iceConnectionState);
     };
 
     const offer = await pc.createOffer();
@@ -138,8 +249,8 @@ async function start() {
 
     statusEl.textContent = 'Connecting to admin...';
   } catch (err) {
-    statusEl.textContent = 'Camera permission deoya lagbe: ' + err.message;
-    document.getElementById('startBtn').style.display = 'inline-block';
+    statusEl.textContent = 'Error: ' + err.message;
+    document.getElementById('entryButtons').style.display = 'block';
   }
 }
 
