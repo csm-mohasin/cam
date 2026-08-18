@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Cam - Admin</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #050810;
+    color: #d7f9ff;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 {
+    color: #00f0ff;
+    text-shadow: 0 0 12px #00f0ff88;
+    font-size: 22px;
+    margin-bottom: 20px;
+    letter-spacing: 1px;
+  }
+  #status {
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: #1a1f2e;
+    border: 1px solid #ff3366;
+    color: #ff3366;
+    font-size: 13px;
+    margin-bottom: 16px;
+    transition: all .3s;
+  }
+  #status.live {
+    border-color: #00ff9d;
+    color: #00ff9d;
+    box-shadow: 0 0 15px #00ff9d55;
+  }
+  video {
+    width: 100%;
+    max-width: 480px;
+    border-radius: 14px;
+    background: #000;
+    border: 1px solid #1e2a3a;
+    box-shadow: 0 0 30px #00f0ff22;
+  }
+  #setup {
+    background: #0d1320;
+    border: 1px solid #1e2a3a;
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    max-width: 320px;
+  }
+  #qrcode { margin: 16px auto; width: fit-content; background: #fff; padding: 10px; border-radius: 8px; }
+  #link {
+    word-break: break-all;
+    font-size: 12px;
+    color: #7fd8ff;
+    background: #050810;
+    padding: 8px;
+    border-radius: 8px;
+    margin-top: 10px;
+    display: block;
+  }
+  button {
+    background: linear-gradient(135deg, #00f0ff, #0080ff);
+    border: none;
+    color: #000;
+    font-weight: bold;
+    padding: 10px 20px;
+    border-radius: 10px;
+    margin-top: 14px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<h1>⚡ LIVE CAM ADMIN</h1>
+<div id="status">Waiting...</div>
+
+<div id="setup">
+  <div>Phone diye ei link/QR open koro:</div>
+  <div id="qrcode"></div>
+  <span id="link"></span>
+  <button onclick="copyLink()">Copy Link</button>
+</div>
+
+<video id="remoteVideo" autoplay playsinline style="display:none"></video>
+
+<script>
+// ==== 1) NIJER FIREBASE CONFIG BOSHAO (nid-main er config use korte paro) ====
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ==== 2) TURN SERVER (free: metered.ca theke banaiya nao, nichey link ache) ====
+const rtcConfig = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
+    { urls: "turn:global.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+  ]
+};
+
+const roomId = Math.random().toString(36).substring(2, 8).toUpperCase();
+const roomRef = db.ref('rooms/' + roomId);
+const statusEl = document.getElementById('status');
+const video = document.getElementById('remoteVideo');
+
+// Show QR + link
+const camUrl = location.href.replace('admin.html', 'cam.html') + '?room=' + roomId;
+document.getElementById('link').textContent = camUrl;
+new QRCode(document.getElementById('qrcode'), { text: camUrl, width: 180, height: 180 });
+function copyLink() { navigator.clipboard.writeText(camUrl); }
+
+let pc = new RTCPeerConnection(rtcConfig);
+
+pc.ontrack = (event) => {
+  video.srcObject = event.streams[0];
+  video.style.display = 'block';
+  document.getElementById('setup').style.display = 'none';
+  statusEl.textContent = '🟢 LIVE';
+  statusEl.classList.add('live');
+};
+
+pc.onicecandidate = (event) => {
+  if (event.candidate) {
+    roomRef.child('calleeCandidates').push(event.candidate.toJSON());
+  }
+};
+
+pc.onconnectionstatechange = () => {
+  if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+    statusEl.textContent = 'Disconnected';
+    statusEl.classList.remove('live');
+    video.style.display = 'none';
+    document.getElementById('setup').style.display = 'block';
+  }
+};
+
+// Listen for offer from phone
+roomRef.child('offer').on('value', async (snap) => {
+  const offer = snap.val();
+  if (!offer || pc.currentRemoteDescription) return;
+  await pc.setRemoteDescription(new RTCSessionDescription(offer));
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  roomRef.child('answer').set({ type: answer.type, sdp: answer.sdp });
+  statusEl.textContent = 'Connecting...';
+});
+
+// Listen for phone's ICE candidates
+roomRef.child('callerCandidates').on('child_added', (snap) => {
+  pc.addIceCandidate(new RTCIceCandidate(snap.val()));
+});
+
+// Cleanup room on close (optional, keeps DB clean)
+window.addEventListener('beforeunload', () => {
+  roomRef.remove();
+});
+</script>
+</body>
+</html>

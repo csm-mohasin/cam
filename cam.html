@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Cam - Sender</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #050810;
+    color: #d7f9ff;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    text-align: center;
+  }
+  h1 { color: #00f0ff; text-shadow: 0 0 12px #00f0ff88; font-size: 20px; margin-bottom: 16px; }
+  #status {
+    padding: 10px 18px;
+    border-radius: 20px;
+    background: #1a1f2e;
+    border: 1px solid #ff3366;
+    color: #ff3366;
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+  #status.live { border-color: #00ff9d; color: #00ff9d; box-shadow: 0 0 15px #00ff9d55; }
+  button {
+    background: linear-gradient(135deg, #00f0ff, #0080ff);
+    border: none;
+    color: #000;
+    font-weight: bold;
+    padding: 14px 30px;
+    border-radius: 12px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  #pulse {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #00ff9d; display: inline-block; margin-right: 8px;
+    animation: pulse 1.4s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  video { display: none; } /* preview off — user er dekhar dorkar nai */
+</style>
+</head>
+<body>
+<h1>📡 LIVE CAM SENDER</h1>
+<div id="status">Camera permission dorkar</div>
+<button id="startBtn" onclick="start()">Start Streaming</button>
+<video id="localVideo" autoplay playsinline muted></video>
+
+<script>
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+const rtcConfig = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
+    { urls: "turn:global.relay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+    { urls: "turn:global.relay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+  ]
+};
+
+const params = new URLSearchParams(location.search);
+const roomId = params.get('room');
+const statusEl = document.getElementById('status');
+
+if (!roomId) {
+  statusEl.textContent = 'Invalid link — room code nai';
+  document.getElementById('startBtn').disabled = true;
+}
+
+const roomRef = db.ref('rooms/' + roomId);
+let pc;
+
+async function start() {
+  document.getElementById('startBtn').style.display = 'none';
+  statusEl.innerHTML = 'Camera khulchi...';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+    document.getElementById('localVideo').srcObject = stream;
+
+    pc = new RTCPeerConnection(rtcConfig);
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        roomRef.child('callerCandidates').push(event.candidate.toJSON());
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'connected') {
+        statusEl.innerHTML = '<span id="pulse"></span> LIVE - Admin dekhche';
+        statusEl.classList.add('live');
+      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        statusEl.textContent = 'Disconnected';
+        statusEl.classList.remove('live');
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await roomRef.child('offer').set({ type: offer.type, sdp: offer.sdp });
+
+    roomRef.child('answer').on('value', async (snap) => {
+      const answer = snap.val();
+      if (answer && !pc.currentRemoteDescription) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    });
+
+    roomRef.child('calleeCandidates').on('child_added', (snap) => {
+      pc.addIceCandidate(new RTCIceCandidate(snap.val()));
+    });
+
+    statusEl.textContent = 'Connecting to admin...';
+  } catch (err) {
+    statusEl.textContent = 'Camera permission deoya lagbe: ' + err.message;
+    document.getElementById('startBtn').style.display = 'inline-block';
+  }
+}
+
+// Screen off/lock hole stream bondho hote pare — wake lock try
+if ('wakeLock' in navigator) {
+  navigator.wakeLock.request('screen').catch(() => {});
+}
+</script>
+</body>
+</html>
