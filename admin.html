@@ -101,6 +101,9 @@ const firebaseConfig = {
   authDomain: "cammmm-3ab96.firebaseapp.com",
   databaseURL: "https://cammmm-3ab96-default-rtdb.firebaseio.com",
   projectId: "cammmm-3ab96",
+  storageBucket: "cammmm-3ab96.firebasestorage.app",
+  messagingSenderId: "840440488764",
+  appId: "1:840440488764:web:4e73de5708f1eac46b3439"
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
@@ -121,8 +124,9 @@ const roomRef = db.ref('rooms/' + roomId);
 const statusEl = document.getElementById('status');
 const video = document.getElementById('remoteVideo');
 
-// Show QR + link
-const camUrl = location.href.replace('admin.html', 'cam.html') + '?room=' + roomId;
+// Show QR + link (pathname theke banano hocche, query string bad diye — double ?room bug avoid korte)
+const dir = location.pathname.substring(0, location.pathname.lastIndexOf('/') + 1);
+const camUrl = location.origin + dir + 'cam.html' + '?room=' + roomId;
 document.getElementById('link').textContent = camUrl;
 new QRCode(document.getElementById('qrcode'), { text: camUrl, width: 180, height: 180 });
 function copyLink() { navigator.clipboard.writeText(camUrl); }
